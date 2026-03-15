@@ -9,45 +9,67 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Windows RDP & Bore Tunnel
+      - name: Setup and Test Local RDP
         run: |
-          Write-Host "正在配置远程桌面..."
+          Write-Host "1. 正在配置系统密码和防火墙..."
           net user runneradmin YourStrongPassw0rd!
+          
+          # 开启 RDP 注册表并强制启动 TermService 服务
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Start-Service TermService -WarningAction SilentlyContinue
           
-          Write-Host "下载并启动 Bore (极速免注册 TCP 穿透)..."
-          # 下载原生的 bore Windows 客户端
+          Write-Host "=================================================="
+          Write-Host "2. 正在检测本地 RDP 服务 (3389 端口) 的可用性..."
+          $rdp_ready = $false
+          for ($i = 0; $i -lt 10; $i++) {
+              # 使用 PowerShell 原生命令测试 3389 端口是否通畅
+              $test = Test-NetConnection -ComputerName "localhost" -Port 3389 -WarningAction SilentlyContinue
+              if ($test.TcpTestSucceeded) {
+                  $rdp_ready = $true
+                  Write-Host "✅ 内部检测通过：虚拟机的 RDP 服务已在 3389 端口成功监听！"
+                  break
+              }
+              Write-Host "等待 RDP 服务启动..."
+              Start-Sleep -Seconds 3
+          }
+          
+          if (-not $rdp_ready) {
+              Write-Error "❌ 致命错误：虚拟机的 RDP 服务未能正常启动！"
+              exit 1
+          }
+          Write-Host "=================================================="
+
+      - name: Start Bore Tunnel
+        run: |
+          Write-Host "3. 下载并启动 Bore 内网穿透..."
           Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
           Expand-Archive -Path bore.zip -DestinationPath .
           
-          # 隐藏启动 bore，将本地 3389 映射到公网 bore.pub
-          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -WindowStyle Hidden -RedirectStandardOutput "bore.log" -RedirectStandardError "bore_err.log"
+          # 隐藏启动 bore
+          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -WindowStyle Hidden -RedirectStandardOutput "bore.log" -RedirectStandardError "bore.log"
           
           Write-Host "等待获取公网地址 (约 5 秒)..."
           Start-Sleep -Seconds 5
           
-          # 提取分配到的公网地址
-          $logContent = ""
-          if (Test-Path bore.log) { $logContent += Get-Content bore.log -Raw }
-          if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw }
-          
-          $match = [regex]::Match($logContent, 'bore\.pub:\d+')
-          
-          if ($match.Success) {
-              $bore_url = $match.Value
-              Write-Host "========================================================================"
-              Write-Host "✅ 远程桌面隧道已建立！"
-              Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，直接输入以下地址连入："
-              Write-Host "👉 $bore_url"
-              Write-Host "👤 用户名: runneradmin"
-              Write-Host "🔑 密码: YourStrongPassw0rd!"
-              Write-Host "========================================================================"
-          } else {
-              Write-Error "❌ 无法获取 Bore 地址，请查看下方完整日志："
-              Write-Host "【日志输出】:"
-              Write-Host $logContent
-              exit 1
+          if (Test-Path bore.log) {
+              $logContent = Get-Content bore.log -Raw
+              $match = [regex]::Match($logContent, 'bore\.pub:\d+')
+              
+              if ($match.Success) {
+                  $bore_url = $match.Value
+                  Write-Host "=================================================="
+                  Write-Host "✅ 远程桌面穿透隧道已建立！"
+                  Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入："
+                  Write-Host "👉 $bore_url"
+                  Write-Host "👤 用户名: runneradmin"
+                  Write-Host "🔑 密码: YourStrongPassw0rd!"
+                  Write-Host "=================================================="
+              } else {
+                  Write-Error "❌ 无法获取 Bore 地址，日志如下："
+                  Write-Host $logContent
+                  exit 1
+              }
           }
 
       - name: Keep Alive
