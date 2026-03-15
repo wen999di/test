@@ -28,19 +28,24 @@ jobs:
           }
 
           Write-Host "下载并安装 ZeroTier..."
-          choco install zerotier-one -y >$null
-          Start-Sleep -Seconds 5
+          choco install zerotier-one -y
+          
+          Write-Host "等待服务启动..."
+          Start-Sleep -Seconds 10
+          
+          # 使用绝对路径调用，防止环境变量未刷新导致找不到命令
+          $ZT_CLI = "C:\ProgramData\ZeroTier\One\zerotier-cli.bat"
           
           # 获取本机的 Node ID
-          $zt_info = zerotier-cli info
-          $node_id = ($zt_info -split ' ')[2]
+          $zt_info = (& $ZT_CLI info | Out-String).Trim()
+          $node_id = ($zt_info -split '\s+')[2]
           Write-Host "本机 Node ID: $node_id"
           echo "ZT_NODE_ID=$node_id" >> $env:GITHUB_ENV
           
           Write-Host "加入网络 $env:ZEROTIER_NETWORK_ID ..."
-          zerotier-cli join $env:ZEROTIER_NETWORK_ID
+          & $ZT_CLI join $env:ZEROTIER_NETWORK_ID
           
-          Write-Host "通�� API 自动授权该节点 (无需手动去网页打勾)..."
+          Write-Host "通过 API 自动授权该节点 (无需手动去网页打勾)..."
           $headers = @{ "Authorization" = "bearer $($env:ZEROTIER_API_TOKEN)" }
           $body = @{ "config" = @{ "authorized" = $true } } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://my.zerotier.com/api/v1/network/$($env:ZEROTIER_NETWORK_ID)/member/$node_id" -Method Post -Headers $headers -Body $body -ContentType "application/json"
@@ -49,7 +54,7 @@ jobs:
           $zt_ip = ""
           for ($i = 0; $i -lt 15; $i++) {
               Start-Sleep -Seconds 3
-              $network_info = zerotier-cli listnetworks
+              $network_info = & $ZT_CLI listnetworks | Out-String
               $match = [regex]::Match($network_info, '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
               if ($match.Success) {
                   $zt_ip = $match.Value
