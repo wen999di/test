@@ -4,44 +4,55 @@ on: workflow_dispatch
 
 jobs:
   run-windows-rdp:
-    runs-on: windows-latest # 直接使用官方 Windows 机器，瞬间启动
+    runs-on: windows-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup RDP and Ngrok
         env:
-          # 需要在 GitHub Secrets 中配置 NGROK_AUTHTOKEN
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          # 1. 给默认用户 runneradmin 设置一个密码（远程桌面登录需要）
+          # 1. 检查是否配置了 Token
+          if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
+              Write-Error "❌ 错误: 未检测到 NGROK_AUTHTOKEN！请前往 GitHub 仓库的 Settings -> Secrets and variables -> Actions 中添加 NGROK_AUTHTOKEN。"
+              exit 1
+          }
+
+          # 2. 设置 Windows 密码并开启远程桌面
+          Write-Host "正在配置远程桌面..."
           net user runneradmin YourStrongPassw0rd!
-          
-          # 2. 开启远程桌面服务和防火墙规则
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           
-          # 3. 安装并启动 Ngrok 进行 TCP 内网穿透
-          choco install ngrok
+          # 3. 安装 Ngrok
+          Write-Host "正在安装 Ngrok..."
+          choco install ngrok -y >$null
           ngrok config add-authtoken $env:NGROK_AUTHTOKEN
           
-          # 后台运行 Ngrok 穿透 3389 端口
-          Start-Process ngrok -ArgumentList "tcp 3389" -WindowStyle Hidden
+          # 4. 启动 Ngrok 并将日志输出到文件，方便排错
+          Write-Host "启动内网穿透..."
+          Start-Process ngrok -ArgumentList "tcp 3389 --log=ngrok.log" -WindowStyle Hidden
           Start-Sleep -Seconds 5
           
-          # 4. 获取并打印公网地址
-          $tunnel = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
-          $publicUrl = $tunnel.tunnels[0].public_url
-          Write-Host "========================================================================"
-          Write-Host "✅ 远程桌面已就绪！"
-          Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入以下地址："
-          Write-Host $publicUrl.Replace("tcp://", "")
-          Write-Host "👤 用户名: runneradmin"
-          Write-Host "🔑 密码: YourStrongPassw0rd!"
-          Write-Host "========================================================================"
+          # 5. 尝试获取公网 URL
+          try {
+              $tunnel = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
+              $publicUrl = $tunnel.tunnels[0].public_url
+              Write-Host "========================================================================"
+              Write-Host "✅ 远程桌面已就绪！"
+              Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入以下地址："
+              Write-Host $publicUrl.Replace("tcp://", "")
+              Write-Host "👤 用户名: runneradmin"
+              Write-Host "🔑 密码: YourStrongPassw0rd!"
+              Write-Host "========================================================================"
+          } catch {
+              Write-Error "❌ 无法获取穿透地址，Ngrok 可能启动失败，以下是错误日志："
+              if (Test-Path ngrok.log) { Get-Content ngrok.log }
+              exit 1
+          }
 
       - name: Keep Alive
         run: |
-          Write-Host "正在保持连接... 若要结束请手动取消该 Action。"
-          # 死循环保持 Action 不退出，方便你远程调试（最大支持 6 小时）
+          Write-Host "正在保持连接... 若要结束请手动在 GitHub 页面点击 Cancel workflow。"
           while ($true) { Start-Sleep -Seconds 60 }
