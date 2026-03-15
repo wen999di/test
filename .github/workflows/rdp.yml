@@ -13,6 +13,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 使用标准 actions 检出私有仓库 wen999di/glacc 到指定目录 glacc-repo
+      # 仍然需要在本仓库的 Secrets 中配置包含 repo 权限的 GH_PAT
+      - name: Checkout glacc config repo
+        uses: actions/checkout@v4
+        with:
+          repository: wen999di/glacc
+          token: ${{ secrets.GH_PAT }}
+          path: glacc-repo
+
       - name: Setup Local RDP
         run: |
           Write-Host "1. 配置系统密码、防火墙并启动 RDP 服务..."
@@ -36,22 +45,6 @@ jobs:
 
           Write-Host "2. 安装 ZeroTier..."
           choco install zerotier-one -y
-
-          Write-Host "等待 ZeroTier 服务安装并启动（最多 30s）..."
-          $svc = Get-Service -Name "ZeroTierOne" -ErrorAction SilentlyContinue
-          $wait = 0
-          while (-not $svc -and $wait -lt 30) {
-              Start-Sleep -Seconds 1
-              $svc = Get-Service -Name "ZeroTierOne" -ErrorAction SilentlyContinue
-              $wait++
-          }
-          if ($svc) {
-              if ($svc.Status -ne 'Running') {
-                  Start-Service -Name "ZeroTierOne" -WarningAction SilentlyContinue
-              }
-          } else {
-              Write-Warning "无法找到 ZeroTierOne 服务，继续尝试通过可执行文件检测。"
-          }
 
           # 尝试通过常见路径查找 zerotier-cli
           $candidates = @(
@@ -132,8 +125,6 @@ jobs:
           Write-Host "=================================================="
 
       - name: Install glacc and Setup Account
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           Write-Host "开始下载 glacc 安装程序..."
           Invoke-WebRequest -Uri "https://down.geilijiasu.net/glacc_pc/glacc-setup.exe" -OutFile "$env:TEMP\glacc-setup.exe"
@@ -141,36 +132,18 @@ jobs:
           Write-Host "静默安装 glacc..."
           Start-Process -FilePath "$env:TEMP\glacc-setup.exe" -ArgumentList "/S" -Wait -NoNewWindow
           
-          Write-Host "寻找 glacc 安装路径..."
-          $glaccPath = ""
-          if (Test-Path "${env:ProgramFiles(x86)}\glacc") { $glaccPath = "${env:ProgramFiles(x86)}\glacc" }
-          elseif (Test-Path "$env:ProgramFiles\glacc") { $glaccPath = "$env:ProgramFiles\glacc" }
-          elseif (Test-Path "$env:LOCALAPPDATA\glacc") { $glaccPath = "$env:LOCALAPPDATA\glacc" }
-          else { 
-              # 如果常规路径未找到，假设在 C 盘根目录或者创建默认目录
-              $glaccPath = "C:\glacc" 
-          }
-          
-          $profileDir = "$glaccPath\Profiles\glaccount"
-          Write-Host "使用配置目录: $profileDir"
+          $profileDir = "C:\Program Files (x86)\glacc\Profiles\glaccount"
+          Write-Host "使用固定的配置目录: $profileDir"
           New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
           
-          if ([string]::IsNullOrWhiteSpace($env:GH_PAT)) {
-              Write-Error "❌ 缺少 GH_PAT (GitHub Personal Access Token) Secret，无法下载私有仓库文件！请在仓库的 Secrets 中配置 GH_PAT。"
-              exit 1
+          Write-Host "从已经检出的仓库目录中复制 account.dat..."
+          $sourceFile = "$env:GITHUB_WORKSPACE\glacc-repo\account.dat"
+          if (Test-Path $sourceFile) {
+              Copy-Item -Path $sourceFile -Destination "$profileDir\account.dat" -Force
+              Write-Host "✅ account.dat 已成功复制到 $profileDir"
           } else {
-              Write-Host "正在从私有仓库 wen999di/glacc 下载 account.dat..."
-              $headers = @{
-                  "Authorization" = "token $($env:GH_PAT)"
-                  "Accept" = "application/vnd.github.v3.raw"
-              }
-              try {
-                  Invoke-RestMethod -Uri "https://api.github.com/repos/wen999di/glacc/contents/account.dat" -Headers $headers -OutFile "$profileDir\account.dat"
-                  Write-Host "✅ account.dat 已成功下载并放入 $profileDir"
-              } catch {
-                  Write-Error "❌ 下载 account.dat 失败，请检查 GH_PAT 的权限是否包含私有仓库读取权限 (repo)。错误信息: $_"
-                  exit 1
-              }
+              Write-Error "❌ 找不到源文件 $sourceFile，请确保 wen999di/glacc 仓库根目录下存在 account.dat 文件。"
+              exit 1
           }
 
       - name: Keep Alive
