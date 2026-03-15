@@ -22,7 +22,7 @@ jobs:
             -e VERSION="tiny11" \
             -e RAM_SIZE="6G" \
             -e CPU_CORES="2" \
-            dockur/windows
+            dockurr/windows
 
       - name: Wait for Booting
         run: |
