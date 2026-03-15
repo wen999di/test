@@ -1,48 +1,38 @@
-name: KVM Capability Check
+name: Debug Windows GUI in Container
 
 on: 
-  push:
-  workflow_dispatch: # 允许你手动点击运行
+  workflow_dispatch: # 允许手动点击运行
 
 jobs:
-  check-kvm:
+  run-windows:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. 检查物理 CPU 指令集
-        run: |
-          echo "正在检查是否存在虚拟化扩展 (vmx 或 svm)..."
-          # 如果输出大于 0，说明 CPU 支持虚拟化
-          egrep -c '(vmx|svm)' /proc/cpuinfo || echo "0"
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: 2. 检查 KVM 设备节点
+      - name: Launch Dockur Windows Container
         run: |
-          if [ -e /dev/kvm ]; then
-            echo "✅ /dev/kvm 设备已存在。"
-            ls -l /dev/kvm
-          else
-            echo "❌ /dev/kvm 设备不存在。"
-          fi
+          # 启动容器：
+          # --privileged: 必须，用于开启 KVM 权限
+          # VERSION="tiny11": 推荐精简版，启动飞快
+          docker run -d \
+            --name win-box \
+            --privileged \
+            -p 8006:8006 \
+            -e VERSION="tiny11" \
+            -e RAM_SIZE="6G" \
+            -e CPU_CORES="2" \
+            dockur/windows
 
-      - name: 3. 尝试使用 cpu-checker 验证
+      - name: Wait for Booting
         run: |
-          sudo apt-get update && sudo apt-get install -y cpu-checker
-          # kvm-ok 会给出最终结论
-          kvm-ok || true
+          echo "正在等待 Windows 虚拟显卡启动 (预计 2-3 分钟)..."
+          # 循环检查容器 8006 端口是否响应
+          timeout 300s bash -c 'until curl -s localhost:8006; do sleep 10; done'
+          echo "✅ 容器 Web UI 已就绪！"
 
-      - name: 4. 尝试通过 udev 强制配置权限
-        run: |
-          echo "正在尝试授予权限并重载 udev..."
-          sudo usermod -aG kvm $USER || true
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm.rules
-          sudo udevadm control --reload-rules && sudo udevadm trigger || true
-          
-          echo "重试检查设备节点："
-          ls -l /dev/kvm || echo "即使配置了 udev，/dev/kvm 依然没有出现。"
-
-      - name: 5. 结论总结
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo "结论：你的环境可以支持 dockur/windows 的硬件加速！"
-          else
-            echo "结论：当前 Runner 硬件层级不支持虚拟化。dockur/windows 将运行在极慢的软件模拟模式下。"
-          fi
+      - name: Setup Tmate Debug Session
+        uses: mxschmitt/action-tmate@v3
+        if: always() # 无论成功失败都保持开启，方便你调试
+        with:
+          limit-access-to-actor: true
