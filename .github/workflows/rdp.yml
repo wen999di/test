@@ -132,7 +132,7 @@ jobs:
           Write-Host "静默安装 glacc..."
           Start-Process -FilePath "$env:TEMP\glacc-setup.exe" -ArgumentList "/S" -Wait -NoNewWindow
           
-          $profilesDir = "C:\Program Files (x86)\glacc\Profiles"
+          $profilesDir = "C:\Program Files (x86)\glacc\"
           Write-Host "使用固定的配置目录: $profilesDir"
           New-Item -ItemType Directory -Force -Path $profilesDir | Out-Null
           
