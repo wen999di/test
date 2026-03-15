@@ -1,6 +1,10 @@
 name: Debug Windows via ZeroTier RDP
 
-on: workflow_dispatch
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - .github/workflows/rdp.yml
 
 jobs:
   run-windows-rdp:
@@ -11,11 +15,14 @@ jobs:
 
       - name: Setup Local RDP
         run: |
-          Write-Host "正在配置系统密码和防火墙..."
+          Write-Host "1. 配置系统密码、防火墙并启动 RDP 服务..."
           net user runneradmin YourStrongPassw0rd!
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Start-Service TermService -WarningAction SilentlyContinue
+          # 尝试启动 TermService
+          if ((Get-Service -Name TermService -ErrorAction SilentlyContinue)) {
+              Start-Service -Name TermService -WarningAction SilentlyContinue
+          }
 
       - name: Install and Join ZeroTier
         env:
@@ -27,63 +34,108 @@ jobs:
               exit 1
           }
 
-          Write-Host "下载并安装 ZeroTier..."
+          Write-Host "2. 安装 ZeroTier..."
           choco install zerotier-one -y
-          
-          Write-Host "等待服务启动..."
-          Start-Sleep -Seconds 10
-          
-          # 使用绝对路径调用，防止环境变量未刷新导致找不到命令
-          $ZT_CLI = "C:\ProgramData\ZeroTier\One\zerotier-cli.bat"
-          
-          # 获取本机的 Node ID
+
+          Write-Host "等待 ZeroTier 服务安装并启动（最多 30s）..."
+          $svc = Get-Service -Name "ZeroTierOne" -ErrorAction SilentlyContinue
+          $wait = 0
+          while (-not $svc -and $wait -lt 30) {
+              Start-Sleep -Seconds 1
+              $svc = Get-Service -Name "ZeroTierOne" -ErrorAction SilentlyContinue
+              $wait++
+          }
+          if ($svc) {
+              if ($svc.Status -ne 'Running') {
+                  Start-Service -Name "ZeroTierOne" -WarningAction SilentlyContinue
+              }
+          } else {
+              Write-Warning "无法找到 ZeroTierOne 服务，继续尝试通过可执行文件检测。"
+          }
+
+          # 尝试通过常见路径查找 zerotier-cli
+          $candidates = @(
+              "$env:ProgramFiles\ZeroTier\One\zerotier-cli.exe",
+              "$env:ProgramFiles(x86)\ZeroTier\One\zerotier-cli.exe",
+              "C:\ProgramData\ZeroTier\One\zerotier-cli.exe",
+              "$env:ProgramFiles\ZeroTier\One\zerotier-cli.bat",
+              "$env:ProgramFiles(x86)\ZeroTier\One\zerotier-cli.bat",
+              "C:\ProgramData\ZeroTier\One\zerotier-cli.bat"
+          )
+
+          $ZT_CLI = $null
+          foreach ($p in $candidates) {
+              if (Test-Path $p) { $ZT_CLI = $p; break }
+          }
+
+          # 如果仍未找到，做一次有限搜索（避免全盘递归太慢）
+          if (-not $ZT_CLI) {
+              Write-Host "在常见路径没有找到 zerotier-cli，尝试搜索 Program Files 目录..."
+              $found = Get-ChildItem -Path $env:ProgramFiles, ($env:'ProgramFiles(x86)') -Filter 'zerotier-cli.*' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $ZT_CLI = $found.FullName }
+          }
+
+          if (-not $ZT_CLI) {
+              Write-Error "❌ 未能找到 zerotier-cli 可执行文件。请确认 ZeroTier 已正确安装。"
+              exit 1
+          }
+
+          Write-Host "使用 zerotier-cli 路径: $ZT_CLI"
+
+          # 获取本机 Node ID
           $zt_info = (& $ZT_CLI info | Out-String).Trim()
+          if (-not $zt_info) {
+              Write-Host "等待 zerotier-cli 准备 (最多 10 秒)..."
+              Start-Sleep -Seconds 5
+              $zt_info = (& $ZT_CLI info | Out-String).Trim()
+          }
+
+          if (-not $zt_info) {
+              Write-Error "❌ zerotier-cli 无响应，请检查服务状态与安装。"
+              exit 1
+          }
+
           $node_id = ($zt_info -split '\s+')[2]
-          Write-Host "本机 Node ID: $node_id"
+          Write-Host "本机 ZeroTier Node ID: $node_id"
           echo "ZT_NODE_ID=$node_id" >> $env:GITHUB_ENV
-          
-          Write-Host "加入网络 $env:ZEROTIER_NETWORK_ID ..."
+
+          Write-Host "加入 ZeroTier 网络 $env:ZEROTIER_NETWORK_ID ..."
           & $ZT_CLI join $env:ZEROTIER_NETWORK_ID
-          
-          Write-Host "通过 API 自动授权该节点 (无需手动去网页打勾)..."
+
+          Write-Host "通过 ZeroTier API 自动授权该节点..."
           $headers = @{ "Authorization" = "bearer $($env:ZEROTIER_API_TOKEN)" }
           $body = @{ "config" = @{ "authorized" = $true } } | ConvertTo-Json
           Invoke-RestMethod -Uri "https://my.zerotier.com/api/v1/network/$($env:ZEROTIER_NETWORK_ID)/member/$node_id" -Method Post -Headers $headers -Body $body -ContentType "application/json"
-          
-          Write-Host "等待分配局域网 IP (约 10-15 秒)..."
+
+          Write-Host "等待分配局域网 IP (最多 30 秒)..."
           $zt_ip = ""
           for ($i = 0; $i -lt 15; $i++) {
-              Start-Sleep -Seconds 3
+              Start-Sleep -Seconds 2
               $network_info = & $ZT_CLI listnetworks | Out-String
-              $match = [regex]::Match($network_info, '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
-              if ($match.Success) {
-                  $zt_ip = $match.Value
-                  break
-              }
+              $match = [regex]::Match($network_info, '\b(?:10|172|192)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+              if ($match.Success) { $zt_ip = $match.Value; break }
           }
-          
+
           if ($zt_ip -eq "") {
-              Write-Error "❌ 未能获取到 IP 地址，请检查网络设置。"
+              Write-Error "❌ 未能获取到 ZeroTier IP，请检查网络设置与控制台是否已授权节点。"
+              # 导出调试信息供你查看
+              Write-Host "`n---- zerotier-cli listnetworks 输出: ----`n"
+              & $ZT_CLI listnetworks | Write-Host
               exit 1
           }
-          
+
           echo "ZT_IP=$zt_ip" >> $env:GITHUB_ENV
-          
           Write-Host "=================================================="
-          Write-Host "✅ ZeroTier 虚拟局域网已连通！"
-          Write-Host "🌐 请确保你的本地电脑也打开了 ZeroTier 并加入了同一个网络。"
-          Write-Host "🌐 然后打开本地『远程桌面连接(mstsc)』，输入以下 IP："
-          Write-Host "👉 $zt_ip"
-          Write-Host "👤 用户名: runneradmin"
-          Write-Host "🔑 密码: YourStrongPassw0rd!"
+          Write-Host "✅ ZeroTier 已连通，分配到的局域网 IP: $zt_ip"
+          Write-Host "请确保本地设备也加入同一 ZeroTier 网络，然后用 mstsc 连接该 IP。"
+          Write-Host "用户名: runneradmin  密码: YourStrongPassw0rd!"
           Write-Host "=================================================="
 
       - name: Keep Alive
         run: |
-          Write-Host "正在保持连接... 调试完成后请在 GitHub 页面手动点击 Cancel workflow 结束。"
+          Write-Host "保持 Action 运行中，调试完成请手动点击 Cancel workflow 结束。"
           while ($true) { Start-Sleep -Seconds 60 }
 
-      # 自动清理：无论 Action 成功还是被取消，都会执行此步骤删除废弃节点
       - name: Cleanup ZeroTier Node
         if: always()
         env:
@@ -91,8 +143,10 @@ jobs:
           ZEROTIER_API_TOKEN: ${{ secrets.ZEROTIER_API_TOKEN }}
         run: |
           if ($env:ZT_NODE_ID) {
-              Write-Host "正在从 ZeroTier 网络中清理并删除此临时节点 ($env:ZT_NODE_ID)..."
+              Write-Host "正在清理临时 ZeroTier 节点 ($env:ZT_NODE_ID) ..."
               $headers = @{ "Authorization" = "bearer $($env:ZEROTIER_API_TOKEN)" }
               Invoke-RestMethod -Uri "https://my.zerotier.com/api/v1/network/$($env:ZEROTIER_NETWORK_ID)/member/$($env:ZT_NODE_ID)" -Method Delete -Headers $headers -ErrorAction SilentlyContinue
-              Write-Host "✅ 节点清理完成！"
+              Write-Host "✅ 节点已清理。"
+          } else {
+              Write-Host "未检测到 ZT_NODE_ID 环境变量，跳过清理。"
           }
