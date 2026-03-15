@@ -1,4 +1,4 @@
-name: Debug Windows via Cloudflare RDP
+name: Debug Windows via Pinggy RDP
 
 on: workflow_dispatch
 
@@ -9,48 +9,39 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Windows RDP & Cloudflare Tunnel
+      - name: Setup Windows RDP & Pinggy Tunnel
         run: |
           Write-Host "正在配置远程桌面..."
           net user runneradmin YourStrongPassw0rd!
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           
-          Write-Host "下载并启动 Cloudflare Tunnel..."
-          # 下载 Windows 版 cloudflared
-          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+          Write-Host "启动 Pinggy TCP 内网穿透..."
+          # Windows 自带 OpenSSH，直接用 ssh 建立 TCP 隧道
+          Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io" -RedirectStandardOutput "pinggy_out.log" -RedirectStandardError "pinggy_err.log" -WindowStyle Hidden
           
-          # 后台运行，将本地 3389 (RDP) 端口穿透出去
-          Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" -RedirectStandardError "tunnel.log" -WindowStyle Hidden
-          
-          # 等待隧道建立
           Write-Host "等待获取公网地址 (约 8 秒)..."
           Start-Sleep -Seconds 8
           
-          # 从日志中提取 trycloudflare.com 网址
-          $logContent = Get-Content tunnel.log -Raw
-          $match = [regex]::Match($logContent, 'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
+          # 从 Pinggy 的输出日志中提取分配的 TCP 端口
+          $logContent = ""
+          if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw }
+          if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw }
+          
+          $match = [regex]::Match($logContent, 'tcp\..*?pinggy\.io:\d+')
           
           if ($match.Success) {
-              $cf_url = $match.Value
-              $cf_host = $cf_url.Replace("https://", "")
-              
+              $pinggy_url = $match.Value
               Write-Host "========================================================================"
-              Write-Host "✅ 远程桌面隧道已建立！"
-              Write-Host "🌐 你的临时主机名是: $cf_host"
-              Write-Host ""
-              Write-Host "【如何连接】请在你自己的电脑上执行以下两步："
-              Write-Host "1. 打开本地终端 (CMD/PowerShell)，运行以下命令建立本地映射："
-              Write-Host "   cloudflared access tcp --hostname $cf_host --url localhost:33890"
-              Write-Host "2. 保持上一个窗口不要关。打开『远程桌面连接(mstsc)』，输入地址："
-              Write-Host "   localhost:33890"
-              Write-Host ""
+              Write-Host "✅ 远程桌面隧道已建立！(由 Pinggy 提供)"
+              Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，直接输入以下地址连入："
+              Write-Host "👉 $pinggy_url"
               Write-Host "👤 用户名: runneradmin"
               Write-Host "🔑 密码: YourStrongPassw0rd!"
               Write-Host "========================================================================"
           } else {
-              Write-Error "❌ 无法获取 Cloudflare Tunnel 地址，请查看下方完整日志："
-              Get-Content tunnel.log
+              Write-Error "❌ 无法获取 Pinggy 地址，请查看下方日志："
+              Write-Host $logContent
               exit 1
           }
 
