@@ -31,8 +31,22 @@ jobs:
           timeout 300s bash -c 'until curl -s localhost:8006; do sleep 10; done'
           echo "✅ 容器 Web UI 已就绪！"
 
+      - name: Expose WebUI via Cloudflare Tunnel
+        run: |
+          # 下载并运行 Cloudflare Tunnel 将本地 8006 端口映射到公网
+          curl -L -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://localhost:8006 > tunnel.log 2>&1 &
+          
+          # 等待隧道建立并获取 URL
+          sleep 5
+          echo "=========================================================="
+          echo "🌐 请在浏览器中访问以下生成的公网 URL 来查看 Windows Web UI："
+          grep -o 'https://.*\.trycloudflare.com' tunnel.log
+          echo "=========================================================="
+
       - name: Setup Tmate Debug Session
         uses: mxschmitt/action-tmate@v3
-        if: always() # 无论成功失败都保持开启，方便你调试
+        if: always() # 无论成功失败都保持开启，防止 Action 结束导致容器销毁
         with:
           limit-access-to-actor: true
