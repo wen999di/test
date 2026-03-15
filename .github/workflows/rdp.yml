@@ -131,76 +131,46 @@ jobs:
           Write-Host "用户名: runneradmin  密码: YourStrongPassw0rd!"
           Write-Host "=================================================="
 
-      - name: Start HTTP Web Server
+      - name: Install glacc and Setup Account
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          $zt_ip = $env:ZT_IP
-          $zt_node_id = $env:ZT_NODE_ID
-
-          if (-not $zt_ip) {
-              Write-Warning "ZT_IP 未设置，跳过网页服务器启动"
-              exit 0
+          Write-Host "开始下载 glacc 安装程序..."
+          Invoke-WebRequest -Uri "https://down.geilijiasu.net/glacc_pc/glacc-setup.exe" -OutFile "$env:TEMP\glacc-setup.exe"
+          
+          Write-Host "静默安装 glacc..."
+          Start-Process -FilePath "$env:TEMP\glacc-setup.exe" -ArgumentList "/S" -Wait -NoNewWindow
+          
+          Write-Host "寻找 glacc 安装路径..."
+          $glaccPath = ""
+          if (Test-Path "${env:ProgramFiles(x86)}\glacc") { $glaccPath = "${env:ProgramFiles(x86)}\glacc" }
+          elseif (Test-Path "$env:ProgramFiles\glacc") { $glaccPath = "$env:ProgramFiles\glacc" }
+          elseif (Test-Path "$env:LOCALAPPDATA\glacc") { $glaccPath = "$env:LOCALAPPDATA\glacc" }
+          else { 
+              # 如果常规路径未找到，假设在 C 盘根目录或者创建默认目录
+              $glaccPath = "C:\glacc" 
           }
-
-          netsh advfirewall firewall add rule name="HTTP Test Server 8080" dir=in action=allow protocol=TCP localport=8080 | Out-Null
-
-          $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-          $htmlPath = "$env:TEMP\zt_index.html"
-          $scriptPath = "$env:TEMP\zt_server.ps1"
-
-          $style = "body{font-family:Arial,sans-serif;margin:40px;background:#f0f4f8;}" +
-                   ".card{background:white;padding:30px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.1);max-width:640px;margin:auto;}" +
-                   "h1{color:#1a73e8;margin-bottom:8px;}" +
-                   ".ok{background:#34a853;color:white;padding:4px 14px;border-radius:20px;font-size:13px;}" +
-                   "table{width:100%;border-collapse:collapse;margin:12px 0;}" +
-                   "td,th{padding:10px 8px;border-bottom:1px solid #e8eaed;text-align:left;}" +
-                   "th{color:#5f6368;font-weight:500;font-size:13px;}" +
-                   "code{background:#f1f3f4;padding:2px 6px;border-radius:4px;}"
-          $html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>ZeroTier Status</title>" +
-                  "<style>$style</style></head><body><div class='card'>" +
-                  "<h1>GitHub Actions ZeroTier Node</h1>" +
-                  "<span class='ok'>&#10003; 网络连接正常</span>" +
-                  "<h2 style='margin-top:24px;font-size:16px;'>节点信息</h2>" +
-                  "<table><tr><th>项目</th><th>值</th></tr>" +
-                  "<tr><td>ZeroTier Node ID</td><td><code>$zt_node_id</code></td></tr>" +
-                  "<tr><td>ZeroTier IP</td><td><code>$zt_ip</code></td></tr>" +
-                  "<tr><td>HTTP 测试页面</td><td><code>http://$zt_ip`:8080/</code></td></tr>" +
-                  "<tr><td>启动时间</td><td>$timestamp</td></tr></table>" +
-                  "<h2 style='margin-top:24px;font-size:16px;'>RDP 连接信息</h2>" +
-                  "<table><tr><td>地址</td><td><code>$zt_ip`:3389</code></td></tr>" +
-                  "<tr><td>用户名</td><td><code>runneradmin</code></td></tr>" +
-                  "<tr><td>密码</td><td><code>YourStrongPassw0rd!</code></td></tr></table>" +
-                  "<p style='color:#5f6368;font-size:13px;margin-top:20px;'>" +
-                  "&#128994; 您能看到此页面，说明 ZeroTier 虚拟网络连接工作正常！</p>" +
-                  "</div></body></html>"
-          $html | Out-File -FilePath $htmlPath -Encoding UTF8
-
-          $serverLines = @(
-              "`$listener = New-Object System.Net.HttpListener",
-              "`$listener.Prefixes.Add('http://$zt_ip`:8080/')",
-              "`$listener.Start()",
-              "while (`$listener.IsListening) {",
-              "    `$ctx = `$listener.GetContext()",
-              "    `$content = [System.IO.File]::ReadAllText('$htmlPath')",
-              "    `$buf = [System.Text.Encoding]::UTF8.GetBytes(`$content)",
-              "    `$ctx.Response.ContentType = 'text/html; charset=utf-8'",
-              "    `$ctx.Response.ContentLength64 = `$buf.Length",
-              "    `$ctx.Response.OutputStream.Write(`$buf, 0, `$buf.Length)",
-              "    `$ctx.Response.OutputStream.Close()",
-              "}"
-          )
-          $serverLines | Out-File -FilePath $scriptPath -Encoding UTF8
-
-          $serverStartupWaitSeconds = 2
-          $proc = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" -WindowStyle Hidden -PassThru
-          if (-not $proc -or $proc.HasExited) {
-              Write-Warning "HTTP 服务器进程未能成功启动，跳过。"
+          
+          $profileDir = "$glaccPath\Profiles\glaccount"
+          Write-Host "使用配置目录: $profileDir"
+          New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+          
+          if ([string]::IsNullOrWhiteSpace($env:GH_PAT)) {
+              Write-Error "❌ 缺少 GH_PAT (GitHub Personal Access Token) Secret，无法下载私有仓库文件！请在仓库的 Secrets 中配置 GH_PAT。"
+              exit 1
           } else {
-              Start-Sleep -Seconds $serverStartupWaitSeconds
-              Write-Host "=================================================="
-              Write-Host "🌐 HTTP 网页服务器已启动！"
-              Write-Host "请用浏览器访问: http://$zt_ip`:8080/"
-              Write-Host "可通过访问此页面测试 ZeroTier 网络连通性"
-              Write-Host "=================================================="
+              Write-Host "正在从私有仓库 wen999di/glacc 下载 account.dat..."
+              $headers = @{
+                  "Authorization" = "token $($env:GH_PAT)"
+                  "Accept" = "application/vnd.github.v3.raw"
+              }
+              try {
+                  Invoke-RestMethod -Uri "https://api.github.com/repos/wen999di/glacc/contents/account.dat" -Headers $headers -OutFile "$profileDir\account.dat"
+                  Write-Host "✅ account.dat 已成功下载并放入 $profileDir"
+              } catch {
+                  Write-Error "❌ 下载 account.dat 失败，请检查 GH_PAT 的权限是否包含私有仓库读取权限 (repo)。错误信息: $_"
+                  exit 1
+              }
           }
 
       - name: Keep Alive
@@ -208,7 +178,6 @@ jobs:
           Write-Host "=================================================="
           Write-Host "调试信息汇总："
           Write-Host "  RDP 地址:      $env:ZT_IP`:3389"
-          Write-Host "  HTTP 测试页面: http://$env:ZT_IP`:8080/"
           Write-Host "  用户名: runneradmin  密码: YourStrongPassw0rd!"
           Write-Host "=================================================="
           Write-Host "保持 Action 运行中，调试完成请手动点击 Cancel workflow 结束。"
