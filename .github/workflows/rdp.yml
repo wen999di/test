@@ -1,0 +1,47 @@
+name: Debug Windows via RDP
+
+on: workflow_dispatch
+
+jobs:
+  run-windows-rdp:
+    runs-on: windows-latest # 直接使用官方 Windows 机器，瞬间启动
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup RDP and Ngrok
+        env:
+          # 需要在 GitHub Secrets 中配置 NGROK_AUTHTOKEN
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          # 1. 给默认用户 runneradmin 设置一个密码（远程桌面登录需要）
+          net user runneradmin YourStrongPassw0rd!
+          
+          # 2. 开启远程桌面服务和防火墙规则
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          
+          # 3. 安装并启动 Ngrok 进行 TCP 内网穿透
+          choco install ngrok
+          ngrok config add-authtoken $env:NGROK_AUTHTOKEN
+          
+          # 后台运行 Ngrok 穿透 3389 端口
+          Start-Process ngrok -ArgumentList "tcp 3389" -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+          
+          # 4. 获取并打印公网地址
+          $tunnel = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
+          $publicUrl = $tunnel.tunnels[0].public_url
+          Write-Host "========================================================================"
+          Write-Host "✅ 远程桌面已就绪！"
+          Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入以下地址："
+          Write-Host $publicUrl.Replace("tcp://", "")
+          Write-Host "👤 用户名: runneradmin"
+          Write-Host "🔑 密码: YourStrongPassw0rd!"
+          Write-Host "========================================================================"
+
+      - name: Keep Alive
+        run: |
+          Write-Host "正在保持连接... 若要结束请手动取消该 Action。"
+          # 死循环保持 Action 不退出，方便你远程调试（最大支持 6 小时）
+          while ($true) { Start-Sleep -Seconds 60 }
