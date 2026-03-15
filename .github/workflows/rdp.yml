@@ -1,4 +1,4 @@
-name: Debug Windows via Bore RDP
+name: Debug Windows via ZeroTier RDP
 
 on: workflow_dispatch
 
@@ -9,70 +9,85 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup and Test Local RDP
+      - name: Setup Local RDP
         run: |
-          Write-Host "1. 正在配置系统密码和防火墙..."
+          Write-Host "正在配置系统密码和防火墙..."
           net user runneradmin YourStrongPassw0rd!
-          
-          # 开启 RDP 注册表并强制启动 TermService 服务
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Start-Service TermService -WarningAction SilentlyContinue
-          
-          Write-Host "=================================================="
-          Write-Host "2. 正在检测本地 RDP 服务 (3389 端口) 的可用性..."
-          $rdp_ready = $false
-          for ($i = 0; $i -lt 10; $i++) {
-              # 使用 PowerShell 原生命令测试 3389 端口是否通畅
-              $test = Test-NetConnection -ComputerName "localhost" -Port 3389 -WarningAction SilentlyContinue
-              if ($test.TcpTestSucceeded) {
-                  $rdp_ready = $true
-                  Write-Host "✅ 内部检测通过：虚拟机的 RDP 服务已在 3389 端口成功监听！"
-                  break
-              }
-              Write-Host "等待 RDP 服务启动..."
-              Start-Sleep -Seconds 3
-          }
-          
-          if (-not $rdp_ready) {
-              Write-Error "❌ 致命错误：虚拟机的 RDP 服务未能正常启动！"
+
+      - name: Install and Join ZeroTier
+        env:
+          ZEROTIER_NETWORK_ID: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          ZEROTIER_API_TOKEN: ${{ secrets.ZEROTIER_API_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ZEROTIER_NETWORK_ID) -or [string]::IsNullOrWhiteSpace($env:ZEROTIER_API_TOKEN)) {
+              Write-Error "❌ 缺少 ZEROTIER_NETWORK_ID 或 ZEROTIER_API_TOKEN，请检查 GitHub Secrets！"
               exit 1
           }
-          Write-Host "=================================================="
 
-      - name: Start Bore Tunnel
-        run: |
-          Write-Host "3. 下载并启动 Bore 内网穿透..."
-          Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
-          Expand-Archive -Path bore.zip -DestinationPath .
-          
-          # 隐藏启动 bore
-          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -WindowStyle Hidden -RedirectStandardOutput "bore.log" -RedirectStandardError "bore.log"
-          
-          Write-Host "等待获取公网地址 (约 5 秒)..."
+          Write-Host "下载并安装 ZeroTier..."
+          choco install zerotier-one -y >$null
           Start-Sleep -Seconds 5
           
-          if (Test-Path bore.log) {
-              $logContent = Get-Content bore.log -Raw
-              $match = [regex]::Match($logContent, 'bore\.pub:\d+')
-              
+          # 获取本机的 Node ID
+          $zt_info = zerotier-cli info
+          $node_id = ($zt_info -split ' ')[2]
+          Write-Host "本机 Node ID: $node_id"
+          echo "ZT_NODE_ID=$node_id" >> $env:GITHUB_ENV
+          
+          Write-Host "加入网络 $env:ZEROTIER_NETWORK_ID ..."
+          zerotier-cli join $env:ZEROTIER_NETWORK_ID
+          
+          Write-Host "通�� API 自动授权该节点 (无需手动去网页打勾)..."
+          $headers = @{ "Authorization" = "bearer $($env:ZEROTIER_API_TOKEN)" }
+          $body = @{ "config" = @{ "authorized" = $true } } | ConvertTo-Json
+          Invoke-RestMethod -Uri "https://my.zerotier.com/api/v1/network/$($env:ZEROTIER_NETWORK_ID)/member/$node_id" -Method Post -Headers $headers -Body $body -ContentType "application/json"
+          
+          Write-Host "等待分配局域网 IP (约 10-15 秒)..."
+          $zt_ip = ""
+          for ($i = 0; $i -lt 15; $i++) {
+              Start-Sleep -Seconds 3
+              $network_info = zerotier-cli listnetworks
+              $match = [regex]::Match($network_info, '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
               if ($match.Success) {
-                  $bore_url = $match.Value
-                  Write-Host "=================================================="
-                  Write-Host "✅ 远程桌面穿透隧道已建立！"
-                  Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入："
-                  Write-Host "👉 $bore_url"
-                  Write-Host "👤 用户名: runneradmin"
-                  Write-Host "🔑 密码: YourStrongPassw0rd!"
-                  Write-Host "=================================================="
-              } else {
-                  Write-Error "❌ 无法获取 Bore 地址，日志如下："
-                  Write-Host $logContent
-                  exit 1
+                  $zt_ip = $match.Value
+                  break
               }
           }
+          
+          if ($zt_ip -eq "") {
+              Write-Error "❌ 未能获取到 IP 地址，请检查网络设置。"
+              exit 1
+          }
+          
+          echo "ZT_IP=$zt_ip" >> $env:GITHUB_ENV
+          
+          Write-Host "=================================================="
+          Write-Host "✅ ZeroTier 虚拟局域网已连通！"
+          Write-Host "🌐 请确保你的本地电脑也打开了 ZeroTier 并加入了同一个网络。"
+          Write-Host "🌐 然后打开本地『远程桌面连接(mstsc)』，输入以下 IP："
+          Write-Host "👉 $zt_ip"
+          Write-Host "👤 用户名: runneradmin"
+          Write-Host "🔑 密码: YourStrongPassw0rd!"
+          Write-Host "=================================================="
 
       - name: Keep Alive
         run: |
-          Write-Host "正在保持连接... 若要结束请手动在 GitHub 页面点击 Cancel workflow。"
+          Write-Host "正在保持连接... 调试完成后请在 GitHub 页面手动点击 Cancel workflow 结束。"
           while ($true) { Start-Sleep -Seconds 60 }
+
+      # 自动清理：无论 Action 成功还是被取消，都会执行此步骤删除废弃节点
+      - name: Cleanup ZeroTier Node
+        if: always()
+        env:
+          ZEROTIER_NETWORK_ID: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          ZEROTIER_API_TOKEN: ${{ secrets.ZEROTIER_API_TOKEN }}
+        run: |
+          if ($env:ZT_NODE_ID) {
+              Write-Host "正在从 ZeroTier 网络中清理并删除此临时节点 ($env:ZT_NODE_ID)..."
+              $headers = @{ "Authorization" = "bearer $($env:ZEROTIER_API_TOKEN)" }
+              Invoke-RestMethod -Uri "https://my.zerotier.com/api/v1/network/$($env:ZEROTIER_NETWORK_ID)/member/$($env:ZT_NODE_ID)" -Method Delete -Headers $headers -ErrorAction SilentlyContinue
+              Write-Host "✅ 节点清理完成！"
+          }
