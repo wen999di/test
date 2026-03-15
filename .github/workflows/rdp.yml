@@ -56,10 +56,10 @@ jobs:
           # 尝试通过常见路径查找 zerotier-cli
           $candidates = @(
               "$env:ProgramFiles\ZeroTier\One\zerotier-cli.exe",
-              "$env:ProgramFiles(x86)\ZeroTier\One\zerotier-cli.exe",
+              "${env:ProgramFiles(x86)}\ZeroTier\One\zerotier-cli.exe",
               "C:\ProgramData\ZeroTier\One\zerotier-cli.exe",
               "$env:ProgramFiles\ZeroTier\One\zerotier-cli.bat",
-              "$env:ProgramFiles(x86)\ZeroTier\One\zerotier-cli.bat",
+              "${env:ProgramFiles(x86)}\ZeroTier\One\zerotier-cli.bat",
               "C:\ProgramData\ZeroTier\One\zerotier-cli.bat"
           )
 
@@ -71,7 +71,7 @@ jobs:
           # 如果仍未找到，做一次有限搜索（避免全盘递归太慢）
           if (-not $ZT_CLI) {
               Write-Host "在常见路径没有找到 zerotier-cli，尝试搜索 Program Files 目录..."
-              $found = Get-ChildItem -Path $env:ProgramFiles, ($env:'ProgramFiles(x86)') -Filter 'zerotier-cli.*' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              $found = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter 'zerotier-cli.*' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($found) { $ZT_CLI = $found.FullName }
           }
 
