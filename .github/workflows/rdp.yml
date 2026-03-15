@@ -1,4 +1,4 @@
-name: Debug Windows via Pinggy RDP
+name: Debug Windows via Bore RDP
 
 on: workflow_dispatch
 
@@ -9,38 +9,43 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Windows RDP & Pinggy Tunnel
+      - name: Setup Windows RDP & Bore Tunnel
         run: |
           Write-Host "正在配置远程桌面..."
           net user runneradmin YourStrongPassw0rd!
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           
-          Write-Host "启动 Pinggy TCP 内网穿透..."
-          # Windows 自带 OpenSSH，直接用 ssh 建立 TCP 隧道
-          Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io" -RedirectStandardOutput "pinggy_out.log" -RedirectStandardError "pinggy_err.log" -WindowStyle Hidden
+          Write-Host "下载并启动 Bore (极速免注册 TCP 穿透)..."
+          # 下载原生的 bore Windows 客户端
+          Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
+          Expand-Archive -Path bore.zip -DestinationPath .
           
-          Write-Host "等待获取公网地址 (约 8 秒)..."
-          Start-Sleep -Seconds 8
+          # 隐藏启动 bore，将本地 3389 映射到公网 bore.pub
+          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -WindowStyle Hidden -RedirectStandardOutput "bore.log" -RedirectStandardError "bore_err.log"
           
-          # 从 Pinggy 的输出日志中提取分配的 TCP 端口
+          Write-Host "等待获取公网地址 (约 5 秒)..."
+          Start-Sleep -Seconds 5
+          
+          # 提取分配到的公网地址
           $logContent = ""
-          if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw }
-          if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw }
+          if (Test-Path bore.log) { $logContent += Get-Content bore.log -Raw }
+          if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw }
           
-          $match = [regex]::Match($logContent, 'tcp\..*?pinggy\.io:\d+')
+          $match = [regex]::Match($logContent, 'bore\.pub:\d+')
           
           if ($match.Success) {
-              $pinggy_url = $match.Value
+              $bore_url = $match.Value
               Write-Host "========================================================================"
-              Write-Host "✅ 远程桌面隧道已建立！(由 Pinggy 提供)"
+              Write-Host "✅ 远程桌面隧道已建立！"
               Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，直接输入以下地址连入："
-              Write-Host "👉 $pinggy_url"
+              Write-Host "👉 $bore_url"
               Write-Host "👤 用户名: runneradmin"
               Write-Host "🔑 密码: YourStrongPassw0rd!"
               Write-Host "========================================================================"
           } else {
-              Write-Error "❌ 无法获取 Pinggy 地址，请查看下方日志："
+              Write-Error "❌ 无法获取 Bore 地址，请查看下方完整日志："
+              Write-Host "【日志输出】:"
               Write-Host $logContent
               exit 1
           }
