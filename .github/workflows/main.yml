@@ -1,20 +1,48 @@
-check-kvm:
+name: KVM Capability Check
+
+on: 
+  push:
+  workflow_dispatch: # 允许你手动点击运行
+
+jobs:
+  check-kvm:
     runs-on: ubuntu-latest
     steps:
-      - name: KVM Capability Detection
+      - name: 1. 检查物理 CPU 指令集
         run: |
-          echo "--- 检查硬件虚拟化指令集 ---"
+          echo "正在检查是否存在虚拟化扩展 (vmx 或 svm)..."
+          # 如果输出大于 0，说明 CPU 支持虚拟化
           egrep -c '(vmx|svm)' /proc/cpuinfo || echo "0"
-          
-          echo "--- 检查 KVM 设备节点 ---"
-          ls -l /dev/kvm || echo "设备不存在"
-          
-          echo "--- 尝试安装并运行检测工具 ---"
+
+      - name: 2. 检查 KVM 设备节点
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "✅ /dev/kvm 设备已存在。"
+            ls -l /dev/kvm
+          else
+            echo "❌ /dev/kvm 设备不存在。"
+          fi
+
+      - name: 3. 尝试使用 cpu-checker 验证
+        run: |
           sudo apt-get update && sudo apt-get install -y cpu-checker
+          # kvm-ok 会给出最终结论
           kvm-ok || true
-          
-          echo "--- 尝试配置 udev 权限 ---"
-          sudo usermod -aG kvm $USER
+
+      - name: 4. 尝试通过 udev 强制配置权限
+        run: |
+          echo "正在尝试授予权限并重载 udev..."
+          sudo usermod -aG kvm $USER || true
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm.rules
-          sudo udevadm control --reload-rules && sudo udevadm trigger
-          ls -l /dev/kvm || echo "配置后依然无法找到设备"
+          sudo udevadm control --reload-rules && sudo udevadm trigger || true
+          
+          echo "重试检查设备节点："
+          ls -l /dev/kvm || echo "即使配置了 udev，/dev/kvm 依然没有出现。"
+
+      - name: 5. 结论总结
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "结论：你的环境可以支持 dockur/windows 的硬件加速！"
+          else
+            echo "结论：当前 Runner 硬件层级不支持虚拟化。dockur/windows 将运行在极慢的软件模拟模式下。"
+          fi
