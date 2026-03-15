@@ -1,4 +1,4 @@
-name: Debug Windows via RDP
+name: Debug Windows via Cloudflare RDP
 
 on: workflow_dispatch
 
@@ -9,51 +9,48 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup RDP and Ngrok
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+      - name: Setup Windows RDP & Cloudflare Tunnel
         run: |
-          # 1. 检查 Token 是否存在
-          if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
-              Write-Error "❌ 错误: 未检测到 NGROK_AUTHTOKEN！"
-              exit 1
-          }
-
-          # 2. 设置 Windows 密码并开启远程桌面
           Write-Host "正在配置远程桌面..."
           net user runneradmin YourStrongPassw0rd!
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           
-          # 3. 安装 Ngrok
-          Write-Host "正在安装 Ngrok..."
-          choco install ngrok -y >$null
-          ngrok config add-authtoken $env:NGROK_AUTHTOKEN
+          Write-Host "下载并启动 Cloudflare Tunnel..."
+          # 下载 Windows 版 cloudflared
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
           
-          # 4. 启动 Ngrok 并【强制捕获】所有报错信息
-          Write-Host "启动内网穿透..."
-          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389" -NoNewWindow -RedirectStandardOutput "ngrok_out.txt" -RedirectStandardError "ngrok_err.txt"
+          # 后台运行，将本地 3389 (RDP) 端口穿透出去
+          Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" -RedirectStandardError "tunnel.log" -WindowStyle Hidden
           
-          # 等待 8 秒让它充分启动或报错
+          # 等待隧道建立
+          Write-Host "等待获取公网地址 (约 8 秒)..."
           Start-Sleep -Seconds 8
           
-          # 打印出 Ngrok 的底层真实日志（极其重要，能看出为什么闪退）
-          Write-Host "====== NGROK 底层运行日志 ======"
-          if (Test-Path ngrok_out.txt) { Get-Content ngrok_out.txt }
-          if (Test-Path ngrok_err.txt) { Get-Content ngrok_err.txt }
-          Write-Host "================================"
+          # 从日志中提取 trycloudflare.com 网址
+          $logContent = Get-Content tunnel.log -Raw
+          $match = [regex]::Match($logContent, 'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
           
-          # 5. 尝试获取公网 URL
-          try {
-              $tunnel = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
-              $publicUrl = $tunnel.tunnels[0].public_url
-              Write-Host "✅ 远程桌面已就绪！"
-              Write-Host "🌐 请在你的电脑上打开『远程桌面连接(mstsc)』，输入以下地址："
-              Write-Host $publicUrl.Replace("tcp://", "")
+          if ($match.Success) {
+              $cf_url = $match.Value
+              $cf_host = $cf_url.Replace("https://", "")
+              
+              Write-Host "========================================================================"
+              Write-Host "✅ 远程桌面隧道已建立！"
+              Write-Host "🌐 你的临时主机名是: $cf_host"
+              Write-Host ""
+              Write-Host "【如何连接】请在你自己的电脑上执行以下两步："
+              Write-Host "1. 打开本地终端 (CMD/PowerShell)，运行以下命令建立本地映射："
+              Write-Host "   cloudflared access tcp --hostname $cf_host --url localhost:33890"
+              Write-Host "2. 保持上一个窗口不要关。打开『远程桌面连接(mstsc)』，输入地址："
+              Write-Host "   localhost:33890"
+              Write-Host ""
               Write-Host "👤 用户名: runneradmin"
               Write-Host "🔑 密码: YourStrongPassw0rd!"
-          } catch {
-              Write-Error "❌ Ngrok 启动失败！请查看上方的【NGROK 底层运行日志】寻找具体原因。"
+              Write-Host "========================================================================"
+          } else {
+              Write-Error "❌ 无法获取 Cloudflare Tunnel 地址，请查看下方完整日志："
+              Get-Content tunnel.log
               exit 1
           }
 
