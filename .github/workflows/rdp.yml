@@ -163,33 +163,25 @@ jobs:
 
       - name: Start App in Sandbox
         run: |
-          Write-Host "正在寻找沙箱内的给梨加速器..."
+          Write-Host "通过 Sandboxie 启动桌面上的应用程序..."
           
-          # 找到 Sandboxie 的启动程序
           $sbieStart = "C:\Program Files\Sandboxie-Plus\Start.exe"
           if (-not (Test-Path $sbieStart)) {
               $sbieStart = "C:\Program Files\Sandboxie\Start.exe"
           }
 
-          $sandboxRoot = "C:\Sandbox\runneradmin\ImportedBox"
-          
-          # 首先尝试找快捷方式（兼容包含中文字符的桌面快捷方式）
-          $target = Get-ChildItem -Path $sandboxRoot -Filter "*给梨加速器*.lnk" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
-          if (-not $target) {
-              # 如果没找到快捷方式，直接找 glacc.exe 启动程序
-              Write-Host "未找到快捷方式，尝试直接寻找程序本体 (glacc.exe)..."
-              $target = Get-ChildItem -Path $sandboxRoot -Filter "glacc*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
+          # 像 Sandboxie UI 一样，直接通知 Sandboxie 启动常见桌面路径上的快捷方式
+          # Sandboxie 的文件虚拟化系统会自动在沙箱的虚拟文件系统中找到它并启动
+          $desktopPaths = @(
+              "C:\Users\Public\Desktop\给梨加速器.lnk",
+              "C:\Users\runneradmin\Desktop\给梨加速器.lnk"
+          )
 
-          if ($target) {
-              Write-Host "找到目标文件: $($target.FullName)"
-              Write-Host "在沙箱 ImportedBox 中启动..."
-              Start-Process -FilePath $sbieStart -ArgumentList "/box:ImportedBox `"$($target.FullName)`""
-              Write-Host "✅ 启动命令已发送。"
-          } else {
-              Write-Error "❌ 未能在沙箱目录中找到“给梨加速器”的快捷方式或可执行文件。"
+          foreach ($lnk in $desktopPaths) {
+              Write-Host "请求 Sandboxie 启动: $lnk"
+              Start-Process -FilePath $sbieStart -ArgumentList "/box:ImportedBox `"$lnk`"" -ErrorAction SilentlyContinue
           }
+          Write-Host "✅ 启动命令已发送 (Sandboxie 将透明解析沙箱内的快捷方式)。"
 
       - name: Keep Alive
         run: |
