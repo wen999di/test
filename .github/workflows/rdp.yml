@@ -101,7 +101,7 @@ jobs:
 
           if ($zt_ip -eq "") {
               Write-Error "❌ 未能获取到 ZeroTier IP，请检查网络设置与控制台是否已授权节点。"
-              Write-Host "`n---- zerotier-cli listnetworks 输��: ----`n"
+              Write-Host "`n---- zerotier-cli listnetworks 输出: ----`n"
               & $ZT_CLI listnetworks | Write-Host
               exit 1
           }
@@ -160,6 +160,36 @@ jobs:
           Add-Content -Path $iniPath -Value "FileRootPath=$extractPath"
           
           Write-Host "✅ 沙箱已成功添加入 Sandboxie！(沙箱名称: ImportedBox)"
+
+      - name: Start App in Sandbox
+        run: |
+          Write-Host "正在寻找沙箱内的给梨加速器..."
+          
+          # 找到 Sandboxie 的启动程序
+          $sbieStart = "C:\Program Files\Sandboxie-Plus\Start.exe"
+          if (-not (Test-Path $sbieStart)) {
+              $sbieStart = "C:\Program Files\Sandboxie\Start.exe"
+          }
+
+          $sandboxRoot = "C:\Sandbox\runneradmin\ImportedBox"
+          
+          # 首先尝试找快捷方式（兼容包含中文字符的桌面快捷方式）
+          $target = Get-ChildItem -Path $sandboxRoot -Filter "*给梨加速器*.lnk" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if (-not $target) {
+              # 如果没找到快捷方式，直接找 glacc.exe 启动程序
+              Write-Host "未找到快捷方式，尝试直接寻找程序本体 (glacc.exe)..."
+              $target = Get-ChildItem -Path $sandboxRoot -Filter "glacc*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+
+          if ($target) {
+              Write-Host "找到目标文件: $($target.FullName)"
+              Write-Host "在沙箱 ImportedBox 中启动..."
+              Start-Process -FilePath $sbieStart -ArgumentList "/box:ImportedBox `"$($target.FullName)`""
+              Write-Host "✅ 启动命令已发送。"
+          } else {
+              Write-Error "❌ 未能在沙箱目录中找到“给梨加速器”的快捷方式或可执行文件。"
+          }
 
       - name: Keep Alive
         run: |
