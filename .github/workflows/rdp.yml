@@ -52,7 +52,6 @@ jobs:
               if (Test-Path $p) { $ZT_CLI = $p; break }
           }
 
-          # 如果仍未找到，做一次有限搜索（避免全盘递归太慢）
           if (-not $ZT_CLI) {
               Write-Host "在常见路径没有找到 zerotier-cli，尝试搜索 Program Files 目录..."
               $found = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter 'zerotier-cli.*' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -102,8 +101,7 @@ jobs:
 
           if ($zt_ip -eq "") {
               Write-Error "❌ 未能获取到 ZeroTier IP，请检查网络设置与控制台是否已授权节点。"
-              # 导出调试信息供你查看
-              Write-Host "`n---- zerotier-cli listnetworks 输出: ----`n"
+              Write-Host "`n---- zerotier-cli listnetworks 输��: ----`n"
               & $ZT_CLI listnetworks | Write-Host
               exit 1
           }
@@ -143,24 +141,24 @@ jobs:
           }
           
           Write-Host "配置 Sandboxie.ini 以引入该沙箱..."
-          # 标准模式 Sandboxie 的配置路径通常在 C:\Windows\Sandboxie.ini
           $iniPath = "C:\Windows\Sandboxie.ini"
           
           # 如果文件尚未生成，则创建一个基础的配置
           if (-not (Test-Path $iniPath)) {
               New-Item -ItemType File -Force -Path $iniPath | Out-Null
-              Add-Content -Path $iniPath -Value "[GlobalSettings]`nTemplate=Windows10`n"
+              Add-Content -Path $iniPath -Value "[GlobalSettings]"
+              Add-Content -Path $iniPath -Value "Template=Windows10"
+              Add-Content -Path $iniPath -Value ""
           }
 
-          $iniContent = @"
-
-[ImportedBox]
-Enabled=y
-ConfigLevel=10
-AutoRecover=y
-FileRootPath=$extractPath
-"@
-          Add-Content -Path $iniPath -Value $iniContent
+          # 追加沙箱配置，避免 YAML 缩进错误
+          Add-Content -Path $iniPath -Value ""
+          Add-Content -Path $iniPath -Value "[ImportedBox]"
+          Add-Content -Path $iniPath -Value "Enabled=y"
+          Add-Content -Path $iniPath -Value "ConfigLevel=10"
+          Add-Content -Path $iniPath -Value "AutoRecover=y"
+          Add-Content -Path $iniPath -Value "FileRootPath=$extractPath"
+          
           Write-Host "✅ 沙箱已成功添加入 Sandboxie！(沙箱名称: ImportedBox)"
 
       - name: Keep Alive
