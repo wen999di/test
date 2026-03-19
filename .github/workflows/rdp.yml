@@ -37,7 +37,6 @@ jobs:
           Write-Host "2. 安装 ZeroTier..."
           choco install zerotier-one -y
 
-          # 尝试通过常见路径查找 zerotier-cli
           $candidates = @(
               "$env:ProgramFiles\ZeroTier\One\zerotier-cli.exe",
               "${env:ProgramFiles(x86)}\ZeroTier\One\zerotier-cli.exe",
@@ -159,6 +158,16 @@ jobs:
           Add-Content -Path $iniPath -Value "AutoRecover=y"
           Add-Content -Path $iniPath -Value "FileRootPath=$extractPath"
           
+          Write-Host "重载 Sandboxie 服务，使其识别新沙箱..."
+          # 尝试重启 Sandboxie 服务
+          Restart-Service -Name SbieSvc -Force -ErrorAction SilentlyContinue
+          
+          # 或者通过 SbieCtrl.exe 强制重载配置
+          $sbieCtrl = "C:\Program Files\Sandboxie-Plus\SbieCtrl.exe"
+          if (Test-Path $sbieCtrl) {
+              Start-Process -FilePath $sbieCtrl -ArgumentList "/reload" -Wait -NoNewWindow
+          }
+          
           Write-Host "✅ 沙箱已成功添加入 Sandboxie！(沙箱名称: ImportedBox)"
 
       - name: Start App in Sandbox
@@ -170,8 +179,9 @@ jobs:
               $sbieStart = "C:\Program Files\Sandboxie\Start.exe"
           }
 
-          # 像 Sandboxie UI 一样，直接通知 Sandboxie 启动常见桌面路径上的快捷方式
-          # Sandboxie 的文件虚拟化系统会自动在沙箱的虚拟文件系统中找到它并启动
+          # 确保给 Sandboxie 服务一点启动时间
+          Start-Sleep -Seconds 3
+
           $desktopPaths = @(
               "C:\Users\Public\Desktop\给梨加速器.lnk",
               "C:\Users\runneradmin\Desktop\给梨加速器.lnk"
