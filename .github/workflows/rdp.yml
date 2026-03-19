@@ -13,15 +13,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 使用标准 actions 检出私有仓库 wen999di/glacc 到指定目录 glacc-repo
-      # 仍然需要在本仓库的 Secrets 中配置包含 repo 权限的 GH_PAT
-      - name: Checkout glacc config repo
-        uses: actions/checkout@v4
-        with:
-          repository: wen999di/glacc
-          token: ${{ secrets.GH_PAT }}
-          path: glacc-repo
-
       - name: Setup Local RDP
         run: |
           Write-Host "1. 配置系统密码、防火墙并启动 RDP 服务..."
@@ -124,24 +115,53 @@ jobs:
           Write-Host "用户名: runneradmin  密码: YourStrongPassw0rd!"
           Write-Host "=================================================="
 
-      - name: Install glacc and Setup Account
+      - name: Install Sandboxie and Setup Sandbox
+        env:
+          SANDBOX_URL: ${{ secrets.SANDBOX_URL }}
+          SANDBOX_PASSWORD: ${{ secrets.SANDBOX_PASSWORD }}
         run: |
-          Write-Host "开始下载 glacc 安装程序..."
-          Invoke-WebRequest -Uri "https://down.geilijiasu.net/glacc_pc/glacc-setup.exe" -OutFile "$env:TEMP\glacc-setup.exe"
+          Write-Host "开始安装 Sandboxie-Plus..."
+          choco install sandboxie-plus -y
           
-          Write-Host "静默安装 glacc..."
-          Start-Process -FilePath "$env:TEMP\glacc-setup.exe" -ArgumentList "/S" -Wait -NoNewWindow
+          if ([string]::IsNullOrWhiteSpace($env:SANDBOX_URL)) {
+              Write-Error "❌ 缺少 SANDBOX_URL，请检查 GitHub Secrets！"
+              exit 1
+          }
+
+          Write-Host "下载 7z 格式的沙箱文件..."
+          Invoke-WebRequest -Uri $env:SANDBOX_URL -OutFile "$env:TEMP\sandbox.7z"
           
-          $profilesDir = "C:\Program Files (x86)\glacc\"
-          Write-Host "使用固定的配置目录: $profilesDir"
-          New-Item -ItemType Directory -Force -Path $profilesDir | Out-Null
+          $extractPath = "C:\Sandbox\runneradmin\ImportedBox"
+          Write-Host "准备解压沙箱到目录: $extractPath"
+          New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
           
-          Write-Host "从已经检出的仓库目录中复制所有文件..."
-          $sourceDir = "$env:GITHUB_WORKSPACE\glacc-repo\*"
+          Write-Host "正在解压..."
+          if ([string]::IsNullOrWhiteSpace($env:SANDBOX_PASSWORD)) {
+              7z x "$env:TEMP\sandbox.7z" -o"$extractPath" -y
+          } else {
+              7z x "$env:TEMP\sandbox.7z" -p"$env:SANDBOX_PASSWORD" -o"$extractPath" -y
+          }
           
-          # 使用 Copy-Item 递归复制所有内容到目标目录
-          Copy-Item -Path $sourceDir -Destination $profilesDir -Recurse -Force
-          Write-Host "✅ 仓库中所有文件已成功复制到 $profilesDir"
+          Write-Host "配置 Sandboxie.ini 以引入该沙箱..."
+          # 标准模式 Sandboxie 的配置路径通常在 C:\Windows\Sandboxie.ini
+          $iniPath = "C:\Windows\Sandboxie.ini"
+          
+          # 如果文件尚未生成，则创建一个基础的配置
+          if (-not (Test-Path $iniPath)) {
+              New-Item -ItemType File -Force -Path $iniPath | Out-Null
+              Add-Content -Path $iniPath -Value "[GlobalSettings]`nTemplate=Windows10`n"
+          }
+
+          $iniContent = @"
+
+[ImportedBox]
+Enabled=y
+ConfigLevel=10
+AutoRecover=y
+FileRootPath=$extractPath
+"@
+          Add-Content -Path $iniPath -Value $iniContent
+          Write-Host "✅ 沙箱已成功添加入 Sandboxie！(沙箱名称: ImportedBox)"
 
       - name: Keep Alive
         run: |
