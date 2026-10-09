@@ -96,6 +96,7 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: plan
         run: python -B _runtime/scripts/actions_entry.py prepare
@@ -110,17 +111,9 @@ jobs:
       - name: Plan work
         id: plan
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: python -B _runtime/scripts/actions_entry.py plan
-      - name: Save encrypted handoff
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: job-plan
-          path: _runtime/artifacts/transport/plan/*.enc
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 30
 
   worker:
     needs: plan
@@ -145,13 +138,11 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: worker
+          SHARD_INDEX: ${{ matrix.index }}
         run: python -B _runtime/scripts/actions_entry.py prepare
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: job-plan
-          path: _runtime/artifacts/transport/incoming-plan
       - name: Load saved state
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -162,18 +153,10 @@ jobs:
           persist-credentials: false
       - name: Process work
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           SHARD_INDEX: ${{ matrix.index }}
         run: python -B _runtime/scripts/actions_entry.py worker
-      - name: Save encrypted checkpoint
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: job-worker-${{ matrix.index }}
-          path: _runtime/artifacts/transport/worker/*.enc
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 30
 
   collect:
     needs: [plan, worker]
@@ -197,20 +180,10 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: collect
         run: python -B _runtime/scripts/actions_entry.py prepare
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: job-plan
-          path: _runtime/artifacts/transport/incoming-plan
-      - name: Load encrypted checkpoints
-        if: needs.plan.outputs.has_work == 'true'
-        continue-on-error: true
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          pattern: job-worker-*
-          path: _runtime/artifacts/transport/incoming-workers
       - name: Load saved state
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -223,22 +196,13 @@ jobs:
       - name: Save results
         id: collect
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          DATA_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: python -B _runtime/scripts/actions_entry.py collect
       - name: Continue work
         if: steps.collect.outputs.continue_run == 'true' && success()
         env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: python -B _runtime/scripts/actions_entry.py dispatch
-      - name: Save encrypted diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: job-collect
-          path: _runtime/artifacts/transport/collect/*.enc
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 30
