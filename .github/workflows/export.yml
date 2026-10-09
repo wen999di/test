@@ -88,7 +88,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: main
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -104,7 +104,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: data
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime/artifacts/data-branch
           persist-credentials: false
       - name: Plan work
@@ -137,7 +137,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: ${{ needs.plan.outputs.source_sha }}
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -157,7 +157,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: ${{ needs.plan.outputs.data_commit }}
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime/artifacts/data-branch
           persist-credentials: false
       - name: Process work
@@ -189,7 +189,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: ${{ needs.plan.outputs.source_sha }}
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -216,7 +216,7 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPOSITORY }}
           ref: data
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _runtime/artifacts/data-branch
           persist-credentials: false
           fetch-depth: 0
@@ -225,7 +225,7 @@ jobs:
         env:
           CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
           DATA_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
-          GH_TOKEN: ${{ secrets.PRIVATE_WRITE_TOKEN }}
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: python -B _runtime/scripts/actions_entry.py collect
       - name: Continue work
         if: steps.collect.outputs.continue_run == 'true' && success()
