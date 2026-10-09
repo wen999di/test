@@ -1,0 +1,244 @@
+name: Run export
+
+on:
+  workflow_dispatch:
+    inputs:
+      appids:
+        description: 'AppIDs separated by spaces or commas; blank selects all'
+        type: string
+        default: ''
+      types:
+        description: 'Type filter; blank selects all'
+        type: string
+        default: ''
+      max_apps:
+        description: 'Total item limit; 0 means unlimited'
+        type: string
+        default: '0'
+      interval:
+        description: 'Operation interval in seconds, from 1 to 60'
+        type: string
+        default: '1'
+      workers:
+        description: 'Parallel jobs'
+        type: choice
+        default: '4'
+        options: ['1', '2', '4', '8']
+      auto_continue:
+        description: 'Continue unfinished work automatically'
+        type: boolean
+        default: true
+      retry_failed:
+        description: 'Retry previously failed items'
+        type: boolean
+        default: false
+      refresh_metadata:
+        description: 'Refresh saved metadata'
+        type: boolean
+        default: false
+      refresh_codes:
+        description: 'Refresh saved results'
+        type: boolean
+        default: false
+      continuation_id:
+        description: 'Internal; leave blank for a new run'
+        type: string
+        default: ''
+      continuation_round:
+        description: 'Internal; leave 0 for a new run'
+        type: string
+        default: '0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONUNBUFFERED: '1'
+  INPUT_APPIDS: ${{ inputs.appids }}
+  INPUT_TYPES: ${{ inputs.types }}
+  INPUT_MAX_APPS: ${{ inputs.max_apps }}
+  INPUT_INTERVAL: ${{ inputs.interval }}
+  INPUT_WORKERS: ${{ inputs.workers }}
+  INPUT_AUTO_CONTINUE: ${{ inputs.auto_continue }}
+  INPUT_RETRY_FAILED: ${{ inputs.retry_failed }}
+  INPUT_REFRESH_METADATA: ${{ inputs.refresh_metadata }}
+  INPUT_REFRESH_CODES: ${{ inputs.refresh_codes }}
+  INPUT_CONTINUATION_ID: ${{ inputs.continuation_id }}
+  INPUT_CONTINUATION_ROUND: ${{ inputs.continuation_round }}
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_work: ${{ steps.plan.outputs.has_work }}
+      data_commit: ${{ steps.plan.outputs.data_commit }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+    steps:
+      - name: Load runtime
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: main
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Prepare runtime
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          OPERATION_ROLE: plan
+        run: python -B _runtime/scripts/actions_entry.py prepare
+      - name: Load saved state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: data
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime/artifacts/data-branch
+          persist-credentials: false
+      - name: Plan work
+        id: plan
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+        run: python -B _runtime/scripts/actions_entry.py plan
+      - name: Save encrypted handoff
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: job-plan
+          path: _runtime/artifacts/transport/plan/*.enc
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+
+  worker:
+    needs: plan
+    if: needs.plan.outputs.has_work == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Load runtime
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: ${{ needs.plan.outputs.source_sha }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Prepare runtime
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          OPERATION_ROLE: worker
+        run: python -B _runtime/scripts/actions_entry.py prepare
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: job-plan
+          path: _runtime/artifacts/transport/incoming-plan
+      - name: Load saved state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: ${{ needs.plan.outputs.data_commit }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime/artifacts/data-branch
+          persist-credentials: false
+      - name: Process work
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          SHARD_INDEX: ${{ matrix.index }}
+        run: python -B _runtime/scripts/actions_entry.py worker
+      - name: Save encrypted checkpoint
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: job-worker-${{ matrix.index }}
+          path: _runtime/artifacts/transport/worker/*.enc
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+
+  collect:
+    needs: [plan, worker]
+    if: always() && !cancelled() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Load runtime
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: ${{ needs.plan.outputs.source_sha }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Prepare runtime
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          OPERATION_ROLE: collect
+        run: python -B _runtime/scripts/actions_entry.py prepare
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: job-plan
+          path: _runtime/artifacts/transport/incoming-plan
+      - name: Load encrypted checkpoints
+        if: needs.plan.outputs.has_work == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: job-worker-*
+          path: _runtime/artifacts/transport/incoming-workers
+      - name: Load saved state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ secrets.PRIVATE_REPOSITORY }}
+          ref: data
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: _runtime/artifacts/data-branch
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Save results
+        id: collect
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          DATA_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
+          GH_TOKEN: ${{ secrets.PRIVATE_WRITE_TOKEN }}
+        run: python -B _runtime/scripts/actions_entry.py collect
+      - name: Continue work
+        if: steps.collect.outputs.continue_run == 'true' && success()
+        env:
+          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python -B _runtime/scripts/actions_entry.py dispatch
+      - name: Save encrypted diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: job-collect
+          path: _runtime/artifacts/transport/collect/*.enc
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
