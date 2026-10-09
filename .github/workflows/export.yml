@@ -96,7 +96,7 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: plan
         run: python -B _runtime/scripts/actions_entry.py prepare
       - name: Load saved state
@@ -110,7 +110,7 @@ jobs:
       - name: Plan work
         id: plan
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: python -B _runtime/scripts/actions_entry.py plan
       - name: Save encrypted handoff
         if: always()
@@ -145,7 +145,7 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: worker
         run: python -B _runtime/scripts/actions_entry.py prepare
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -162,7 +162,7 @@ jobs:
           persist-credentials: false
       - name: Process work
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           SHARD_INDEX: ${{ matrix.index }}
         run: python -B _runtime/scripts/actions_entry.py worker
       - name: Save encrypted checkpoint
@@ -197,7 +197,7 @@ jobs:
           python-version: '3.12'
       - name: Prepare runtime
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           OPERATION_ROLE: collect
         run: python -B _runtime/scripts/actions_entry.py prepare
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -223,14 +223,14 @@ jobs:
       - name: Save results
         id: collect
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           DATA_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: python -B _runtime/scripts/actions_entry.py collect
       - name: Continue work
         if: steps.collect.outputs.continue_run == 'true' && success()
         env:
-          CHECKPOINT_KEY: ${{ secrets.CHECKPOINT_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: python -B _runtime/scripts/actions_entry.py dispatch
       - name: Save encrypted diagnostics
