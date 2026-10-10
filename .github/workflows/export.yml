@@ -16,11 +16,16 @@ on:
         type: string
         default: '0'
       interval:
-        description: 'Operation interval in seconds, from 1 to 60'
+        description: 'Interval per concurrent item in seconds, from 1 to 60'
         type: string
         default: '1'
       workers:
         description: 'Parallel jobs'
+        type: choice
+        default: '2'
+        options: ['1', '2']
+      concurrency:
+        description: 'Concurrent items per job'
         type: choice
         default: '4'
         options: ['1', '2', '4', '8']
@@ -65,6 +70,7 @@ env:
   INPUT_MAX_APPS: ${{ inputs.max_apps }}
   INPUT_INTERVAL: ${{ inputs.interval }}
   INPUT_WORKERS: ${{ inputs.workers }}
+  INPUT_CONCURRENCY: ${{ inputs.concurrency }}
   INPUT_AUTO_CONTINUE: ${{ inputs.auto_continue }}
   INPUT_RETRY_FAILED: ${{ inputs.retry_failed }}
   INPUT_REFRESH_METADATA: ${{ inputs.refresh_metadata }}
@@ -122,7 +128,7 @@ jobs:
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Load runtime

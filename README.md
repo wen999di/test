@@ -6,6 +6,7 @@ results are maintained in a separate private repository.
 Run **Actions → Run export → Run workflow** on `main`. Leave the internal
 continuation fields at their defaults. Empty filters select all items; a nonzero
 `max_apps` limits the total across workers and disables automatic continuation.
+The defaults are two parallel jobs with four concurrent items per job.
 
 The workflow publishes only basic progress. Saved results, execution state
 and detailed diagnostics are stored in the private repository. Runtime
